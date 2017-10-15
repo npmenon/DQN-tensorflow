@@ -1,11 +1,13 @@
 import gym
 import random
 import numpy as np
+import threading
 from .utils import rgb2gray, imresize
 
 class Environment(object):
   def __init__(self, config):
     self.env = gym.make(config.env_name)
+    self.lock = threading.Lock()
 
     screen_width, screen_height, self.action_repeat, self.random_start = \
         config.screen_width, config.screen_height, config.action_repeat, config.random_start
@@ -17,18 +19,18 @@ class Environment(object):
     self.reward = 0
     self.terminal = True
 
-  def new_game(self, from_random_game=False):
+  def new_game(self, lock, from_random_game=False):
     if self.lives == 0:
       self._screen = self.env.reset()
     self._step(0)
     self.render()
     return self.screen, 0, 0, self.terminal
 
-  def new_random_game(self):
-    self.new_game(True)
+  def new_random_game(self, lock):
+    self.new_game(lock, True)
     for _ in xrange(random.randint(0, self.random_start - 1)):
+      self.render()
       self._step(0)
-    self.render()
     return self.screen, 0, 0, self.terminal
 
   def _step(self, action):
@@ -41,7 +43,6 @@ class Environment(object):
   @ property
   def screen(self):
     return imresize(rgb2gray(self._screen)/255., self.dims)
-    #return cv2.resize(cv2.cvtColor(self._screen, cv2.COLOR_BGR2YCR_CB)/255., self.dims)[:,:,0]
 
   @property
   def action_size(self):
@@ -57,7 +58,8 @@ class Environment(object):
 
   def render(self):
     if self.display:
-      self.env.render()
+      with self.lock:
+        self.env.render()
 
   def after_act(self, action):
     self.render()
@@ -66,7 +68,7 @@ class GymEnvironment(Environment):
   def __init__(self, config):
     super(GymEnvironment, self).__init__(config)
 
-  def act(self, action, is_training=True):
+  def act(self, action, lock, is_training=True):
     cumulated_reward = 0
     start_lives = self.lives
 

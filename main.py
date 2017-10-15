@@ -26,7 +26,7 @@ flags.DEFINE_integer('action_repeat', 4, 'The number of action to be repeated')
 # Etc
 flags.DEFINE_boolean('use_gpu', False, 'Whether to use gpu or not')
 flags.DEFINE_string('gpu_fraction', '1/1', 'idx / # of gpu fraction e.g. 1/3, 2/3, 3/3')
-flags.DEFINE_boolean('display', False, 'Whether to do display the game screen or not')
+flags.DEFINE_boolean('display', True, 'Whether to do display the game screen or not')
 flags.DEFINE_boolean('is_train', True, 'Whether to do training or testing')
 flags.DEFINE_integer('random_seed', 123, 'Value of random seed')
 
@@ -49,16 +49,18 @@ def calc_gpu_fraction(fraction_string):
 
 
 def worker(agent, env, num):
-  print("********************** Starting thread ", num, " **************************")
-  agent.train(env)
+  print("********************** Starting thread ", num + 1, " **************************")
+  agent.train(env, threading.currentThread().ident)
 
 
 def initThreads(agent, env, config):
   envs = [env for _ in range(config.number_of_threads)]
+  actor_learner_threads = [threading.Thread(target=worker, args=(agent, envs[i], i)) for i in range(config.number_of_threads)]
   for i in range(config.number_of_threads):
-    actor_learner_threads = threading.Thread(target=worker, args=(agent, envs[i], i))
-    actor_learner_threads.start()
+    actor_learner_threads[i].start()
 
+  for i in range(config.number_of_threads):
+    actor_learner_threads[i].join()
 
 def main(_):
   gpu_options = tf.GPUOptions(
@@ -79,7 +81,7 @@ def main(_):
     if not FLAGS.use_gpu:
       config.cnn_format = 'NHWC'
 
-    agent = Agent(config, env, sess)
+    agent = Agent(config, env, sess, threading.Lock())
 
     if FLAGS.is_train:
       initThreads(agent, env, config)

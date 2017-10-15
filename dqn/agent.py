@@ -5,6 +5,7 @@ import random
 import numpy as np
 from tqdm import tqdm
 import tensorflow as tf
+import sys, traceback
 
 from .base import BaseModel
 from .history import History
@@ -13,11 +14,12 @@ from .ops import linear, conv2d, clipped_error
 from .utils import get_time, save_pkl, load_pkl
 
 class Agent(BaseModel):
-  def __init__(self, config, environment, sess):
+  def __init__(self, config, environment, sess, lock):
     super(Agent, self).__init__(config)
     self.sess = sess
     self.weight_dir = 'weights'
     self.start_step = None
+    self.lock = lock
 
     self.env = environment
     self.history = History(self.config)
@@ -30,22 +32,28 @@ class Agent(BaseModel):
 
     self.build_dqn()
 
-  def train(self, env):
-    self.env = env
+  def train(self, env, thread_id):
+    env = env
     self.start_step = 0
     start_time = time.time()
+    print("\nInside Train method of thread: ", thread_id)
 
     num_game, self.update_count, ep_reward = 0, 0, 0.
     total_reward, self.total_loss, self.total_q = 0., 0., 0.
     max_avg_ep_reward = 0
     ep_rewards, actions = [], []
 
-    screen, reward, action, terminal = self.env.new_random_game()
+    time.sleep(thread_id % 10)
+    print("\nSlept enough!! I ", thread_id, " am getting up!! :)")
+    try:
+      screen, reward, action, terminal = env.new_random_game(self.lock)
+    except:
+      print("Exception!!")
+      traceback.print_exc(file=sys.stdout)
 
     for _ in range(self.history_length):
       self.history.add(screen)
 
-    time.sleep(3000 * random.random())
     for self.step in tqdm(range(self.start_step, self.max_step), ncols=70, initial=self.start_step):
       if self.step == self.learn_start:
         num_game, self.update_count, ep_reward = 0, 0, 0.
@@ -53,14 +61,14 @@ class Agent(BaseModel):
         ep_rewards, actions = [], []
 
       # 1. predict
-      action = self.predict(self.history.get())
+      action = self.predict(self.history.get(), env)
       # 2. act
-      screen, reward, terminal = self.env.act(action, is_training=True)
+      screen, reward, terminal = env.act(action, self.lock, is_training=True)
       # 3. observe
       self.observe(screen, reward, action, terminal)
 
       if terminal:
-        screen, reward, action, terminal = self.env.new_random_game()
+        screen, reward, action, terminal = env.new_random_game(self.lock)
 
         num_game += 1
         ep_rewards.append(ep_reward)
@@ -88,7 +96,7 @@ class Agent(BaseModel):
               % (avg_reward, avg_loss, avg_q, avg_ep_reward, max_ep_reward, min_ep_reward, num_game))
 
           if max_avg_ep_reward * 0.9 <= avg_ep_reward:
-            self.step_assign_op.eval({self.step_input: self.step + 1})
+            self.step_assign_op.eval(session=self.sess,feed_dict={self.step_input: self.step + 1})
             self.save_model(self.step + 1)
 
             max_avg_ep_reward = max(max_avg_ep_reward, avg_ep_reward)
@@ -116,15 +124,15 @@ class Agent(BaseModel):
           ep_rewards = []
           actions = []
 
-  def predict(self, s_t, test_ep=None):
+  def predict(self, s_t, env, test_ep=None):
     ep = test_ep or (self.ep_end +
         max(0., (self.ep_start - self.ep_end)
           * (self.ep_end_t - max(0., self.step - self.learn_start)) / self.ep_end_t))
 
     if random.random() < ep:
-      action = random.randrange(self.env.action_size)
+      action = random.randrange(env.action_size)
     else:
-      action = self.q_action.eval({self.s_t: [s_t]})[0]
+      action = self.q_action.eval(session=self.sess, feed_dict={self.s_t: [s_t]})[0]
 
     return action
 
@@ -150,7 +158,7 @@ class Agent(BaseModel):
     t = time.time()
     if self.double_q:
       # Double Q-learning
-      pred_action = self.q_action.eval({self.s_t: s_t_plus_1})
+      pred_action = self.q_action.eval(session=self.sess,feed_dict={self.s_t: s_t_plus_1})
 
       q_t_plus_1_with_pred_action = self.target_q_with_idx.eval({
         self.target_s_t: s_t_plus_1,
@@ -158,7 +166,7 @@ class Agent(BaseModel):
       })
       target_q_t = (1. - terminal) * self.discount * q_t_plus_1_with_pred_action + reward
     else:
-      q_t_plus_1 = self.target_q.eval({self.target_s_t: s_t_plus_1})
+      q_t_plus_1 = self.target_q.eval(session=self.sess,feed_dict={self.target_s_t: s_t_plus_1})
 
       terminal = np.array(terminal) + 0.
       max_q_t_plus_1 = np.max(q_t_plus_1, axis=1)
@@ -336,7 +344,7 @@ class Agent(BaseModel):
 
   def update_target_q_network(self):
     for name in self.w.keys():
-      self.t_w_assign_op[name].eval({self.t_w_input[name]: self.w[name].eval()})
+      self.t_w_assign_op[name].eval(session=self.sess,feed_dict={self.t_w_input[name]: self.w[name].eval()})
 
   def save_weight_to_pkl(self):
     if not os.path.exists(self.weight_dir):
@@ -378,7 +386,7 @@ class Agent(BaseModel):
 
     best_reward, best_idx = 0, 0
     for idx in xrange(n_episode):
-      screen, reward, action, terminal = self.env.new_random_game()
+      screen, reward, action, terminal = self.env.new_random_game(self.lock)
       current_reward = 0
 
       for _ in range(self.history_length):
