@@ -17,6 +17,7 @@ class Agent(BaseModel):
     super(Agent, self).__init__(config)
     self.sess = sess
     self.weight_dir = 'weights'
+    self.start_step = None
 
     self.env = environment
     self.history = History(self.config)
@@ -29,8 +30,9 @@ class Agent(BaseModel):
 
     self.build_dqn()
 
-  def train(self):
-    start_step = self.step_op.eval()
+  def train(self, env):
+    self.env = env
+    self.start_step = 0
     start_time = time.time()
 
     num_game, self.update_count, ep_reward = 0, 0, 0.
@@ -43,7 +45,8 @@ class Agent(BaseModel):
     for _ in range(self.history_length):
       self.history.add(screen)
 
-    for self.step in tqdm(range(start_step, self.max_step), ncols=70, initial=start_step):
+    time.sleep(3000 * random.random())
+    for self.step in tqdm(range(self.start_step, self.max_step), ncols=70, initial=self.start_step):
       if self.step == self.learn_start:
         num_game, self.update_count, ep_reward = 0, 0, 0.
         total_reward, self.total_loss, self.total_q = 0., 0., 0.
@@ -186,7 +189,7 @@ class Agent(BaseModel):
       if self.cnn_format == 'NHWC':
         self.s_t = tf.placeholder('float32',
             [None, self.screen_height, self.screen_width, self.history_length], name='s_t')
-      else:
+      else: # (?,4,32,32)
         self.s_t = tf.placeholder('float32',
             [None, self.history_length, self.screen_height, self.screen_width], name='s_t')
 
@@ -220,6 +223,7 @@ class Agent(BaseModel):
         self.l4, self.w['l4_w'], self.w['l4_b'] = linear(self.l3_flat, 512, activation_fn=activation_fn, name='l4')
         self.q, self.w['q_w'], self.w['q_b'] = linear(self.l4, self.env.action_size, name='q')
 
+      # get the q action
       self.q_action = tf.argmax(self.q, dimension=1)
 
       q_summary = []

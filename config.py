@@ -3,7 +3,7 @@ class AgentConfig(object):
   display = False
 
   max_step = 5000 * scale
-  memory_size = 100 * scale
+  memory_size = 50 * scale
 
   batch_size = 32
   random_start = 30
@@ -14,6 +14,8 @@ class AgentConfig(object):
   learning_rate_minimum = 0.00025
   learning_rate_decay = 0.96
   learning_rate_decay_step = 5 * scale
+
+  number_of_threads = 8
 
   ep_end = 0.1
   ep_start = 1.

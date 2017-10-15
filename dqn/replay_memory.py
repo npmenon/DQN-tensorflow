@@ -15,7 +15,7 @@ class ReplayMemory:
     self.memory_size = config.memory_size
     self.actions = np.empty(self.memory_size, dtype = np.uint8)
     self.rewards = np.empty(self.memory_size, dtype = np.integer)
-    self.screens = np.empty((self.memory_size, config.screen_height, config.screen_width), dtype = np.float16)
+    self.screens = np.empty((self.memory_size, config.screen_height, config.screen_width), dtype=np.float16)
     self.terminals = np.empty(self.memory_size, dtype = np.bool)
     self.history_length = config.history_length
     self.dims = (config.screen_height, config.screen_width)
@@ -23,7 +23,7 @@ class ReplayMemory:
     self.count = 0
     self.current = 0
 
-    # pre-allocate prestates and poststates for minibatch
+    # pre-allocate prestates and poststates for minibatch (32,4,84,84)
     self.prestates = np.empty((self.batch_size, self.history_length) + self.dims, dtype = np.float16)
     self.poststates = np.empty((self.batch_size, self.history_length) + self.dims, dtype = np.float16)
 
@@ -70,7 +70,7 @@ class ReplayMemory:
         # otherwise use this index
         break
       
-      # NB! having index first is fastest in C-order matrices
+      # NB! having index first is fastest in C-order matrices (32,4,84,84)
       self.prestates[len(indexes), ...] = self.getState(index - 1)
       self.poststates[len(indexes), ...] = self.getState(index)
       indexes.append(index)
