@@ -60,7 +60,7 @@ class Agent(BaseModel):
     time.sleep(thread_id % 10)
     print("\nSlept enough!! I ", thread_id, " am getting up!! :)")
 
-    screen, reward, action, terminal = env.new_random_game(self.lock, thread_id)
+    screen, reward, action, terminal = env.new_random_game(self.lock)
 
     # stack 'history_length' frames to be given as input to the cnn
     for _ in range(self.history_length):
@@ -109,7 +109,7 @@ class Agent(BaseModel):
           self.update_target_q_network()
 
       if terminal:
-        screen, reward, action, terminal = env.new_random_game(self.lock, thread_id)
+        screen, reward, action, terminal = env.new_random_game(self.lock)
 
         num_game += 1
         ep_rewards.append(ep_reward)
@@ -446,7 +446,7 @@ class Agent(BaseModel):
 
     best_reward, best_idx = 0, 0
     for idx in xrange(n_episode):
-      screen, reward, action, terminal = env.new_random_game(self.lock, 0)
+      screen, reward, action, terminal = env.new_random_game(self.lock)
       current_reward = 0
 
       for _ in range(self.history_length):

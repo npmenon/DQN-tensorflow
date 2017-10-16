@@ -25,7 +25,7 @@ class Environment(object):
       self.render()
     return self.screen, 0, 0, self.terminal
 
-  def new_random_game(self, lock, thread_id):
+  def new_random_game(self, lock):
     self.new_game(lock, True)
     for _ in xrange(random.randint(0, self.random_start - 1)):
       with lock:
