@@ -68,6 +68,9 @@ class Agent(BaseModel):
 
     # repeat for max_steps
     t = 0
+    epsilon = 1.0
+    final_epsilon = self.get_final_epilon()
+    print("Starting thread ", thread_id, "with final epsilon ", final_epsilon)
     for self.step in tqdm(range(self.start_step, self.max_step), ncols=70, initial=self.start_step):
       if self.step == self.learn_start:
         num_game, update_count, ep_reward = 0, 0, 0.
@@ -75,7 +78,7 @@ class Agent(BaseModel):
         ep_rewards, actionsList = [], []
 
       # 1. predict
-      action = self.predict(history.get(), env)
+      action, epsilon = self.predict(history.get(), env, epsilon=epsilon, final_epsilon=final_epsilon)
 
       # 2. act
       screen, reward, terminal = env.act(action, self.lock, is_training=True)
@@ -171,17 +174,15 @@ class Agent(BaseModel):
           ep_rewards = []
           actionsList = []
 
-  def predict(self, s_t, env, test_ep=None):
-    ep = test_ep or (self.ep_end +
-        max(0., (self.ep_start - self.ep_end)
-          * (self.ep_end_t - max(0., self.step - self.learn_start)) / self.ep_end_t))
+  def predict(self, s_t, env, test_ep=None, epsilon=1., final_epsilon=0.1):
+    epsilon = test_ep or (epsilon - ((1.0 - final_epsilon) / self.anneal_epsilon_timesteps))
 
-    if random.random() < ep:
+    if random.random() < epsilon:
       action = random.randrange(env.action_size)
     else:
       action = self.q_action.eval(session=self.sess, feed_dict={self.s_t: [s_t]})[0]
 
-    return action
+    return action, epsilon
 
   def getState(self, index, screens):
     # normalize index to expected range, allows negative indexes
@@ -235,7 +236,7 @@ class Agent(BaseModel):
       max_q_t_plus_1 = np.max(q_t_plus_1, axis=1)
       target_q_t = (1. - terminal) * self.discount * max_q_t_plus_1 + reward
 
-    _, q_t, loss= self.sess.run([self.optim, self.q, self.loss], {
+    _, q_t, loss = self.sess.run([self.optim, self.q, self.loss], {
       self.target_q_t: target_q_t,
       self.action: action,
       self.s_t: s_t,
@@ -243,6 +244,12 @@ class Agent(BaseModel):
     })
 
     return loss, q_t.mean()
+
+  def get_final_epilon(self):
+    """http://arxiv.org/pdf/1602.01783v1.pdf"""
+    final_epsilons = np.array([.1, .01, .5])
+    probabilities = np.array([0.4, 0.3, 0.3])
+    return np.random.choice(final_epsilons, 1, p=list(probabilities))[0]
 
   def build_dqn(self):
     self.w = {}
@@ -454,7 +461,7 @@ class Agent(BaseModel):
 
       for t in tqdm(range(n_step), ncols=70):
         # 1. predict
-        action = self.predict(test_history.get(), env, test_ep)
+        action = self.predict(test_history.get(), env, test_ep=test_ep)
         # 2. act
         screen, reward, terminal = env.act(action, is_training=False)
         # 3. observe

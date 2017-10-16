@@ -16,6 +16,7 @@ class AgentConfig(object):
   learning_rate_decay_step = 5 * scale
 
   number_of_threads = 5
+  anneal_epsilon_timesteps = 1000000
 
   ep_end = 0.1
   ep_start = 1.
@@ -23,7 +24,7 @@ class AgentConfig(object):
 
   history_length = 4
   train_frequency = 32
-  learn_start = 0.5 * scale
+  learn_start = 0.05 * scale
 
   min_delta = -1
   max_delta = 1
