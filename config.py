@@ -9,7 +9,7 @@ class AgentConfig(object):
   random_start = 30
   cnn_format = 'NCHW'
   discount = 0.99
-  target_q_update_step = 10 * scale
+  target_q_update_step = 1 * scale
   learning_rate = 0.00025
   learning_rate_minimum = 0.00005
   learning_rate_decay = 0.96

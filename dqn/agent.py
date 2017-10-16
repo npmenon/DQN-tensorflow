@@ -46,15 +46,15 @@ class Agent(BaseModel):
     start_time = time.time()
 
     # initialize variables
-    num_game, self.update_count, ep_reward = 0, 0, 0.
-    total_reward, self.total_loss, self.total_q = 0., 0., 0.
+    num_game, update_count, ep_reward = 0, 0, 0.
+    total_reward, total_loss, total_q = 0., 0., 0.
     max_avg_ep_reward = 0
     ep_rewards, actionsList = [], []
 
-    actions = np.empty(self.batch_size, dtype=np.uint8)
-    rewards = np.empty(self.batch_size, dtype=np.integer)
-    screens = np.empty((self.batch_size, self.screen_height, self.screen_width), dtype=np.float16)
-    terminals = np.empty(self.batch_size, dtype=np.bool)
+    actions = np.empty(self.batch_size + 1, dtype=np.uint8)
+    rewards = np.empty(self.batch_size + 1, dtype=np.integer)
+    screens = np.empty((self.batch_size + 1, self.screen_height, self.screen_width), dtype=np.float16)
+    terminals = np.empty(self.batch_size + 1, dtype=np.bool)
     current = 0
 
     time.sleep(thread_id % 10)
@@ -70,8 +70,8 @@ class Agent(BaseModel):
     t = 0
     for self.step in tqdm(range(self.start_step, self.max_step), ncols=70, initial=self.start_step):
       if self.step == self.learn_start:
-        num_game, self.update_count, ep_reward = 0, 0, 0.
-        total_reward, self.total_loss, self.total_q = 0., 0., 0.
+        num_game, update_count, ep_reward = 0, 0, 0.
+        total_reward, total_loss, total_q = 0., 0., 0.
         ep_rewards, actionsList = [], []
 
       # 1. predict
@@ -95,13 +95,16 @@ class Agent(BaseModel):
       if self.step > self.learn_start:
       # Optionally perform gradient descent
         if t % self.train_frequency == 0 or terminal:
-          self.q_learning_mini_batch(screens, actions, rewards, terminals)
+          loss, q_t_mean = self.q_learning_mini_batch(screens, actions, rewards, terminals)
+          total_loss += loss
+          total_q += q_t_mean
+          update_count += 1
 
           # clear content
-          actions = np.empty(self.batch_size, dtype=np.uint8)
-          rewards = np.empty(self.batch_size, dtype=np.integer)
-          screens = np.empty((self.batch_size, self.screen_height, self.screen_width), dtype=np.float16)
-          terminals = np.empty(self.batch_size, dtype=np.bool)
+          actions = np.empty(self.batch_size + 1, dtype=np.uint8)
+          rewards = np.empty(self.batch_size + 1, dtype=np.integer)
+          screens = np.empty((self.batch_size + 1, self.screen_height, self.screen_width), dtype=np.float16)
+          terminals = np.empty(self.batch_size + 1, dtype=np.bool)
           current = -1
 
         # Optionally update target network parameters
@@ -117,7 +120,7 @@ class Agent(BaseModel):
         current = 0
       else:
         ep_reward += reward
-        current = (current + 1) % self.batch_size
+        current = (current + 1) % (self.batch_size + 1)
 
       t += 1
       actionsList.append(action)
@@ -126,8 +129,8 @@ class Agent(BaseModel):
       if self.step >= self.learn_start:
         if self.step % self.test_step == self.test_step - 1:
           avg_reward = total_reward / self.test_step
-          avg_loss = self.total_loss / self.update_count
-          avg_q = self.total_q / self.update_count
+          avg_loss = total_loss / update_count
+          avg_q = total_q / update_count
 
           try:
             max_ep_reward = np.max(ep_rewards)
@@ -156,14 +159,14 @@ class Agent(BaseModel):
                 'episode.num of game': num_game,
                 'episode.rewards': ep_rewards,
                 'episode.actions': actionsList,
-                'training.learning_rate': self.learning_rate_op.eval({self.learning_rate_step: self.step}),
+                'training.learning_rate': self.learning_rate_op.eval(session=self.sess,feed_dict={self.learning_rate_step: self.step}),
               }, self.step)
 
           num_game = 0
           total_reward = 0.
-          self.total_loss = 0.
-          self.total_q = 0.
-          self.update_count = 0
+          total_loss = 0.
+          total_q = 0.
+          update_count = 0
           ep_reward = 0.
           ep_rewards = []
           actionsList = []
@@ -199,7 +202,7 @@ class Agent(BaseModel):
     for index in xrange(0, self.batch_size):
       prestates[len(indexes), ...] = self.getState(index, screens)
       poststates[len(indexes), ...] = self.getState(index + 1, screens)
-      indexes.append(index)
+      indexes.append(index+1)
 
     action = actions[indexes]
     reward = rewards[indexes]
@@ -239,10 +242,7 @@ class Agent(BaseModel):
       self.learning_rate_step: self.step,
     })
 
-    # self.writer.add_summary(summary_str, self.step)
-    self.total_loss += loss
-    self.total_q += q_t.mean()
-    self.update_count += 1
+    return loss, q_t.mean()
 
   def build_dqn(self):
     self.w = {}
