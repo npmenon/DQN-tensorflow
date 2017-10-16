@@ -1,13 +1,11 @@
 import gym
 import random
 import numpy as np
-import threading
 from .utils import rgb2gray, imresize
 
 class Environment(object):
   def __init__(self, config):
     self.env = gym.make(config.env_name)
-    self.lock = threading.Lock()
 
     screen_width, screen_height, self.action_repeat, self.random_start = \
         config.screen_width, config.screen_height, config.action_repeat, config.random_start
@@ -23,13 +21,15 @@ class Environment(object):
     if self.lives == 0:
       self._screen = self.env.reset()
     self._step(0)
-    self.render()
+    with lock:
+      self.render()
     return self.screen, 0, 0, self.terminal
 
-  def new_random_game(self, lock):
+  def new_random_game(self, lock, thread_id):
     self.new_game(lock, True)
     for _ in xrange(random.randint(0, self.random_start - 1)):
-      self.render()
+      with lock:
+        self.render()
       self._step(0)
     return self.screen, 0, 0, self.terminal
 
@@ -58,8 +58,7 @@ class Environment(object):
 
   def render(self):
     if self.display:
-      with self.lock:
-        self.env.render()
+      self.env.render()
 
   def after_act(self, action):
     self.render()
@@ -68,7 +67,7 @@ class GymEnvironment(Environment):
   def __init__(self, config):
     super(GymEnvironment, self).__init__(config)
 
-  def act(self, action, lock, is_training=True):
+  def act(self, action, lock=None, is_training=True):
     cumulated_reward = 0
     start_lives = self.lives
 
@@ -85,7 +84,8 @@ class GymEnvironment(Environment):
 
     self.reward = cumulated_reward
 
-    self.after_act(action)
+    with lock:
+      self.after_act(action)
     return self.state
 
 class SimpleGymEnvironment(Environment):

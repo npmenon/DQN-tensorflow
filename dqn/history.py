@@ -11,6 +11,7 @@ class History:
         [history_length, screen_height, screen_width], dtype=np.float32)
 
   def add(self, screen):
+    # type: (object) -> object
     self.history[:-1] = self.history[1:]
     self.history[-1] = screen
 

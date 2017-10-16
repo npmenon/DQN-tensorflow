@@ -49,15 +49,20 @@ def calc_gpu_fraction(fraction_string):
 
 
 def worker(agent, env, num):
-  print("********************** Starting thread ", num + 1, " **************************")
+  print("********************** Starting thread ", num + 1, " **************************", end="\n")
   agent.train(env, threading.currentThread().ident)
 
 
-def initThreads(agent, env, config):
-  envs = [env for _ in range(config.number_of_threads)]
+def init_threads(agent, config):
+  envs = [GymEnvironment(config) for _ in range(config.number_of_threads)]
   actor_learner_threads = [threading.Thread(target=worker, args=(agent, envs[i], i)) for i in range(config.number_of_threads)]
   for i in range(config.number_of_threads):
     actor_learner_threads[i].start()
+
+  # if config.display:
+  #   while True:
+  #     for env in envs:
+  #       env.render()
 
   for i in range(config.number_of_threads):
     actor_learner_threads[i].join()
@@ -81,12 +86,13 @@ def main(_):
     if not FLAGS.use_gpu:
       config.cnn_format = 'NHWC'
 
+    # Create a single instance of Agent to be multi-threaded
     agent = Agent(config, env, sess, threading.Lock())
 
     if FLAGS.is_train:
-      initThreads(agent, env, config)
+      init_threads(agent, config)
     else:
-      agent.play()
+      agent.play(env)
 
 if __name__ == '__main__':
   tf.app.run()

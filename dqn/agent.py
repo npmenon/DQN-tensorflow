@@ -5,25 +5,27 @@ import random
 import numpy as np
 from tqdm import tqdm
 import tensorflow as tf
-import sys, traceback
 
 from .base import BaseModel
 from .history import History
-from .replay_memory import ReplayMemory
 from .ops import linear, conv2d, clipped_error
 from .utils import get_time, save_pkl, load_pkl
 
 class Agent(BaseModel):
-  def __init__(self, config, environment, sess, lock):
+  def __init__(self, config, env,  sess, lock):
     super(Agent, self).__init__(config)
+    self.env = env
     self.sess = sess
     self.weight_dir = 'weights'
     self.start_step = None
     self.lock = lock
 
-    self.env = environment
-    self.history = History(self.config)
-    self.memory = ReplayMemory(self.config, self.model_dir)
+    self.batch_size = config.batch_size
+    self.screen_height = config.screen_height
+    self.screen_width = config.screen_width
+
+    self.min_reward = config.min_reward
+    self.max_reward = config.max_reward
 
     with tf.variable_scope('step'):
       self.step_op = tf.Variable(0, trainable=False, name='step')
@@ -32,51 +34,93 @@ class Agent(BaseModel):
 
     self.build_dqn()
 
-  def train(self, env, thread_id):
-    env = env
-    self.start_step = 0
-    start_time = time.time()
-    print("\nInside Train method of thread: ", thread_id)
+  def train(self, environment, thread_id):
+    # Initialize history
+    history = History(self.config)
 
+    # Initialize start step
+    self.start_step = self.step_op.eval(session=self.sess)
+
+    # Initialize separate environment for each agent thread
+    env = environment
+    start_time = time.time()
+
+    # initialize variables
     num_game, self.update_count, ep_reward = 0, 0, 0.
     total_reward, self.total_loss, self.total_q = 0., 0., 0.
     max_avg_ep_reward = 0
-    ep_rewards, actions = [], []
+    ep_rewards, actionsList = [], []
+
+    actions = np.empty(self.batch_size, dtype=np.uint8)
+    rewards = np.empty(self.batch_size, dtype=np.integer)
+    screens = np.empty((self.batch_size, self.screen_height, self.screen_width), dtype=np.float16)
+    terminals = np.empty(self.batch_size, dtype=np.bool)
+    current = 0
 
     time.sleep(thread_id % 10)
     print("\nSlept enough!! I ", thread_id, " am getting up!! :)")
-    try:
-      screen, reward, action, terminal = env.new_random_game(self.lock)
-    except:
-      print("Exception!!")
-      traceback.print_exc(file=sys.stdout)
 
+    screen, reward, action, terminal = env.new_random_game(self.lock, thread_id)
+
+    # stack 'history_length' frames to be given as input to the cnn
     for _ in range(self.history_length):
-      self.history.add(screen)
+      history.add(screen)
 
+    # repeat for max_steps
+    t = 0
     for self.step in tqdm(range(self.start_step, self.max_step), ncols=70, initial=self.start_step):
       if self.step == self.learn_start:
         num_game, self.update_count, ep_reward = 0, 0, 0.
         total_reward, self.total_loss, self.total_q = 0., 0., 0.
-        ep_rewards, actions = [], []
+        ep_rewards, actionsList = [], []
 
       # 1. predict
-      action = self.predict(self.history.get(), env)
+      action = self.predict(history.get(), env)
+
       # 2. act
       screen, reward, terminal = env.act(action, self.lock, is_training=True)
+
       # 3. observe
-      self.observe(screen, reward, action, terminal)
+
+      # reward between (-1,1)
+      reward = max(self.min_reward, min(self.max_reward, reward))
+      # save the state
+      actions[current] = action
+      rewards[current] = reward
+      screens[current, ...] = screen
+      terminals[current] = terminal
+
+      history.add(screen)
+
+      if self.step > self.learn_start:
+      # Optionally perform gradient descent
+        if t % self.train_frequency == 0 or terminal:
+          self.q_learning_mini_batch(screens, actions, rewards, terminals)
+
+          # clear content
+          actions = np.empty(self.batch_size, dtype=np.uint8)
+          rewards = np.empty(self.batch_size, dtype=np.integer)
+          screens = np.empty((self.batch_size, self.screen_height, self.screen_width), dtype=np.float16)
+          terminals = np.empty(self.batch_size, dtype=np.bool)
+          current = -1
+
+        # Optionally update target network parameters
+        if self.step % self.target_q_update_step == 0:
+          self.update_target_q_network()
 
       if terminal:
-        screen, reward, action, terminal = env.new_random_game(self.lock)
+        screen, reward, action, terminal = env.new_random_game(self.lock, thread_id)
 
         num_game += 1
         ep_rewards.append(ep_reward)
         ep_reward = 0.
+        current = 0
       else:
         ep_reward += reward
+        current = (current + 1) % self.batch_size
 
-      actions.append(action)
+      t += 1
+      actionsList.append(action)
       total_reward += reward
 
       if self.step >= self.learn_start:
@@ -111,7 +155,7 @@ class Agent(BaseModel):
                 'episode.avg reward': avg_ep_reward,
                 'episode.num of game': num_game,
                 'episode.rewards': ep_rewards,
-                'episode.actions': actions,
+                'episode.actions': actionsList,
                 'training.learning_rate': self.learning_rate_op.eval({self.learning_rate_step: self.step}),
               }, self.step)
 
@@ -122,7 +166,7 @@ class Agent(BaseModel):
           self.update_count = 0
           ep_reward = 0.
           ep_rewards = []
-          actions = []
+          actionsList = []
 
   def predict(self, s_t, env, test_ep=None):
     ep = test_ep or (self.ep_end +
@@ -136,24 +180,40 @@ class Agent(BaseModel):
 
     return action
 
-  def observe(self, screen, reward, action, terminal):
-    reward = max(self.min_reward, min(self.max_reward, reward))
+  def getState(self, index, screens):
+    # normalize index to expected range, allows negative indexes
+    index = index % self.train_frequency
+    # if is not in the beginning of matrix
+    if index >= self.history_length - 1:
+      return screens[(index - (self.history_length - 1)):(index + 1), ...]
 
-    self.history.add(screen)
-    self.memory.add(screen, reward, action, terminal)
+    indexes = [(index - i) % self.train_frequency for i in reversed(range(self.history_length))]
+    return screens[indexes, ...]
 
-    if self.step > self.learn_start:
-      if self.step % self.train_frequency == 0:
-        self.q_learning_mini_batch()
+  def sample(self, screens, actions, rewards, terminals):
+    dims = (self.screen_height, self.screen_width)
+    prestates = np.empty((self.batch_size, self.history_length) + dims, dtype=np.float16)
+    poststates = np.empty((self.batch_size, self.history_length) + dims, dtype=np.float16)
 
-      if self.step % self.target_q_update_step == self.target_q_update_step - 1:
-        self.update_target_q_network()
+    indexes = []
+    for index in xrange(0, self.batch_size):
+      prestates[len(indexes), ...] = self.getState(index, screens)
+      poststates[len(indexes), ...] = self.getState(index + 1, screens)
+      indexes.append(index)
 
-  def q_learning_mini_batch(self):
-    if self.memory.count < self.history_length:
-      return
+    action = actions[indexes]
+    reward = rewards[indexes]
+    terminal = terminals[indexes]
+
+    if self.cnn_format == 'NHWC':
+      return np.transpose(prestates, (0, 2, 3, 1)), action, \
+        reward, np.transpose(poststates, (0, 2, 3, 1)), terminal
     else:
-      s_t, action, reward, s_t_plus_1, terminal = self.memory.sample()
+      return prestates, action, reward, poststates, terminal
+
+  def q_learning_mini_batch(self, screens, actions, rewards, terminals):
+    s_t, action, reward, s_t_plus_1, terminal = self.sample(screens, actions, rewards, terminals)
+    print("Step count: ", self.step)
 
     t = time.time()
     if self.double_q:
@@ -166,20 +226,20 @@ class Agent(BaseModel):
       })
       target_q_t = (1. - terminal) * self.discount * q_t_plus_1_with_pred_action + reward
     else:
-      q_t_plus_1 = self.target_q.eval(session=self.sess,feed_dict={self.target_s_t: s_t_plus_1})
+      q_t_plus_1 = self.target_q.eval(session=self.sess, feed_dict={self.target_s_t: s_t_plus_1})
 
       terminal = np.array(terminal) + 0.
       max_q_t_plus_1 = np.max(q_t_plus_1, axis=1)
       target_q_t = (1. - terminal) * self.discount * max_q_t_plus_1 + reward
 
-    _, q_t, loss, summary_str = self.sess.run([self.optim, self.q, self.loss, self.q_summary], {
+    _, q_t, loss= self.sess.run([self.optim, self.q, self.loss], {
       self.target_q_t: target_q_t,
       self.action: action,
       self.s_t: s_t,
       self.learning_rate_step: self.step,
     })
 
-    self.writer.add_summary(summary_str, self.step)
+    # self.writer.add_summary(summary_str, self.step)
     self.total_loss += loss
     self.total_q += q_t.mean()
     self.update_count += 1
@@ -234,11 +294,11 @@ class Agent(BaseModel):
       # get the q action
       self.q_action = tf.argmax(self.q, dimension=1)
 
-      q_summary = []
-      avg_q = tf.reduce_mean(self.q, 0)
-      for idx in xrange(self.env.action_size):
-        q_summary.append(tf.summary.histogram('q/%s' % idx, avg_q[idx]))
-      self.q_summary = tf.summary.merge(q_summary, 'q_summary')
+      # q_summary = []
+      # avg_q = tf.reduce_mean(self.q, 0)
+      # for idx in xrange(self.env.action_size):
+      #   q_summary.append(tf.summary.histogram('q/%s' % idx, avg_q[idx]))
+      # self.q_summary = tf.summary.merge(q_summary, 'q_summary')
 
     # target network
     with tf.variable_scope('target'):
@@ -344,7 +404,7 @@ class Agent(BaseModel):
 
   def update_target_q_network(self):
     for name in self.w.keys():
-      self.t_w_assign_op[name].eval(session=self.sess,feed_dict={self.t_w_input[name]: self.w[name].eval()})
+      self.t_w_assign_op[name].eval(session=self.sess, feed_dict={self.t_w_input[name]: self.w[name].eval(session=self.sess)})
 
   def save_weight_to_pkl(self):
     if not os.path.exists(self.weight_dir):
@@ -374,19 +434,19 @@ class Agent(BaseModel):
     for summary_str in summary_str_lists:
       self.writer.add_summary(summary_str, self.step)
 
-  def play(self, n_step=10000, n_episode=100, test_ep=None, render=False):
+  def play(self, env, n_step=10000, n_episode=100, test_ep=None, render=False):
     if test_ep == None:
       test_ep = self.ep_end
 
     test_history = History(self.config)
 
-    if not self.display:
-      gym_dir = '/tmp/%s-%s' % (self.env_name, get_time())
-      self.env.env.monitor.start(gym_dir)
+    # if not self.display:
+    #   gym_dir = '/tmp/%s-%s' % (self.env_name, get_time())
+    #   self.env.env.monitor.start(gym_dir)
 
     best_reward, best_idx = 0, 0
     for idx in xrange(n_episode):
-      screen, reward, action, terminal = self.env.new_random_game(self.lock)
+      screen, reward, action, terminal = env.new_random_game(self.lock, 0)
       current_reward = 0
 
       for _ in range(self.history_length):
@@ -394,9 +454,9 @@ class Agent(BaseModel):
 
       for t in tqdm(range(n_step), ncols=70):
         # 1. predict
-        action = self.predict(test_history.get(), test_ep)
+        action = self.predict(test_history.get(), env, test_ep)
         # 2. act
-        screen, reward, terminal = self.env.act(action, is_training=False)
+        screen, reward, terminal = env.act(action, is_training=False)
         # 3. observe
         test_history.add(screen)
 
@@ -414,4 +474,3 @@ class Agent(BaseModel):
 
     if not self.display:
       self.env.env.monitor.close()
-      #gym.upload(gym_dir, writeup='https://github.com/devsisters/DQN-tensorflow', api_key='')
