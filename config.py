@@ -15,7 +15,7 @@ class AgentConfig(object):
   learning_rate_decay = 0.96
   learning_rate_decay_step = 5 * scale
 
-  number_of_threads = 8
+  number_of_threads = 6
   anneal_epsilon_timesteps = 1000000
 
   ep_end = 0.1
