@@ -1,5 +1,5 @@
 class AgentConfig(object):
-  scale = 1000
+  scale = 10000
   display = False
 
   max_step = 5000 * scale
@@ -15,7 +15,7 @@ class AgentConfig(object):
   learning_rate_decay = 0.96
   learning_rate_decay_step = 5 * scale
 
-  number_of_threads = 5
+  number_of_threads = 8
   anneal_epsilon_timesteps = 1000000
 
   ep_end = 0.1

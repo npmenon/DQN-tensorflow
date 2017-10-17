@@ -461,7 +461,7 @@ class Agent(BaseModel):
 
       for t in tqdm(range(n_step), ncols=70):
         # 1. predict
-        action = self.predict(test_history.get(), env, test_ep=test_ep)
+        action, _ = self.predict(test_history.get(), env, test_ep=test_ep)
         # 2. act
         screen, reward, terminal = env.act(action, is_training=False)
         # 3. observe
