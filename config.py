@@ -15,8 +15,9 @@ class AgentConfig(object):
   learning_rate_decay = 0.96
   learning_rate_decay_step = 5 * scale
 
-  number_of_threads = 6
-  anneal_epsilon_timesteps = 1000000
+  number_of_threads = 3
+  anneal_epsilon_timesteps = 400000
+  initial_epsilon = 1.0
 
   ep_end = 0.1
   ep_start = 1.
@@ -32,7 +33,7 @@ class AgentConfig(object):
   double_q = False
   dueling = False
 
-  _test_step = 5 * scale
+  _test_step = 5000
   _save_step = _test_step * 10
 
 class EnvironmentConfig(object):

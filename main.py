@@ -25,7 +25,7 @@ flags.DEFINE_integer('action_repeat', 4, 'The number of action to be repeated')
 # Etc
 flags.DEFINE_boolean('use_gpu', False, 'Whether to use gpu or not')
 flags.DEFINE_string('gpu_fraction', '1/1', 'idx / # of gpu fraction e.g. 1/3, 2/3, 3/3')
-flags.DEFINE_boolean('display', True, 'Whether to do display the game screen or not')
+flags.DEFINE_boolean('display', False, 'Whether to do display the game screen or not')
 flags.DEFINE_boolean('is_train', True, 'Whether to do training or testing')
 flags.DEFINE_integer('random_seed', 123, 'Value of random seed')
 
@@ -47,6 +47,7 @@ def calc_gpu_fraction(fraction_string):
   return fraction
 
 
+# worker threads each with a different train() / actor-learner function
 def worker(agent, env, num):
   print("********************** Starting thread ", num + 1, " **************************", end="\n")
   agent.train(env, threading.currentThread().ident)
@@ -55,9 +56,11 @@ def worker(agent, env, num):
 def init_threads(agent, config):
   envs = [GymEnvironment(config) for _ in range(config.number_of_threads)]
   actor_learner_threads = [threading.Thread(target=worker, args=(agent, envs[i], i)) for i in range(config.number_of_threads)]
+  # start each thread
   for i in range(config.number_of_threads):
     actor_learner_threads[i].start()
 
+  # wait for each thread to finish
   for i in range(config.number_of_threads):
     actor_learner_threads[i].join()
 

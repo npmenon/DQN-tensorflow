@@ -34,6 +34,19 @@ class Agent(BaseModel):
 
     self.build_dqn()
 
+  def init_states(self):
+    actions = np.empty(self.batch_size, dtype=np.uint8)
+    rewards = np.empty(self.batch_size, dtype=np.int)
+    prestates = np.empty((self.batch_size, self.history_length, self.screen_height, self.screen_width), dtype=np.float16)
+    poststates = np.empty((self.batch_size, self.history_length, self.screen_height, self.screen_width), dtype=np.float16)
+    terminals = np.empty(self.batch_size, dtype=np.bool)
+
+    if self.cnn_format == 'NHWC':
+      prestates = np.empty((self.batch_size, self.screen_height, self.screen_width, self.history_length), dtype=np.float16)
+      poststates = np.empty((self.batch_size, self.screen_height, self.screen_width, self.history_length), dtype=np.float16)
+
+    return actions, rewards, prestates, poststates, terminals
+
   def train(self, environment, thread_id):
     # Initialize history
     history = History(self.config)
@@ -50,15 +63,10 @@ class Agent(BaseModel):
     total_reward, total_loss, total_q = 0., 0., 0.
     max_avg_ep_reward = 0
     ep_rewards, actionsList = [], []
-
-    actions = np.empty(self.batch_size + 1, dtype=np.uint8)
-    rewards = np.empty(self.batch_size + 1, dtype=np.integer)
-    screens = np.empty((self.batch_size + 1, self.screen_height, self.screen_width), dtype=np.float16)
-    terminals = np.empty(self.batch_size + 1, dtype=np.bool)
+    actions, rewards, prestates, poststates, terminals = self.init_states()
     current = 0
 
     time.sleep(thread_id % 10)
-    print("\nSlept enough!! I ", thread_id, " am getting up!! :)")
 
     screen, reward, action, terminal = env.new_random_game(self.lock)
 
@@ -70,49 +78,43 @@ class Agent(BaseModel):
     t = 0
     epsilon = 1.0
     final_epsilon = self.get_final_epilon()
-    print("Starting thread ", thread_id, "with final epsilon ", final_epsilon)
+    print("Starting thread ", thread_id, "with final epsilon ", final_epsilon, end="\n")
     for self.step in tqdm(range(self.start_step, self.max_step), ncols=70, initial=self.start_step):
-      if self.step == self.learn_start:
-        num_game, update_count, ep_reward = 0, 0, 0.
-        total_reward, total_loss, total_q = 0., 0., 0.
-        ep_rewards, actionsList = [], []
+
+      # get current stacked state
+      s_t = history.get()
+      prestates[current, ...] = s_t
 
       # 1. predict
-      action, epsilon = self.predict(history.get(), env, epsilon=epsilon, final_epsilon=final_epsilon)
+      action, epsilon = self.predict(s_t, env, epsilon=epsilon, final_epsilon=final_epsilon)
 
       # 2. act
       screen, reward, terminal = env.act(action, self.lock, is_training=True)
-
-      # 3. observe
-
-      # reward between (-1,1)
-      reward = max(self.min_reward, min(self.max_reward, reward))
-      # save the state
-      actions[current] = action
-      rewards[current] = reward
-      screens[current, ...] = screen
-      terminals[current] = terminal
-
       history.add(screen)
 
-      if self.step > self.learn_start:
-      # Optionally perform gradient descent
-        if t % self.train_frequency == 0 or terminal:
-          loss, q_t_mean = self.q_learning_mini_batch(screens, actions, rewards, terminals)
-          total_loss += loss
-          total_q += q_t_mean
-          update_count += 1
+      reward = max(self.min_reward, min(self.max_reward, reward))
+      actions[current] = action
+      rewards[current] = reward
+      poststates[current, ...] = history.get()
+      terminals[current] = terminal
 
-          # clear content
-          actions = np.empty(self.batch_size + 1, dtype=np.uint8)
-          rewards = np.empty(self.batch_size + 1, dtype=np.integer)
-          screens = np.empty((self.batch_size + 1, self.screen_height, self.screen_width), dtype=np.float16)
-          terminals = np.empty(self.batch_size + 1, dtype=np.bool)
-          current = -1
+      t += 1
 
-        # Optionally update target network parameters
-        if self.step % self.target_q_update_step == 0:
-          self.update_target_q_network()
+      # 3. observe
+      # update target network parameters
+      if (self.step+1) % self.target_q_update_step == 0:
+        self.update_target_q_network()
+
+      # perform gradient descent
+      if t % self.train_frequency == 0 or terminal:
+        loss, q_t_mean = self.q_learning_mini_batch(prestates, poststates, actions, rewards, terminals, current)
+        total_loss += loss
+        total_q += q_t_mean
+        update_count += 1
+
+        # clear content
+        actions, rewards, prestates, poststates, terminals = self.init_states()
+        current = -1
 
       if terminal:
         screen, reward, action, terminal = env.new_random_game(self.lock)
@@ -123,14 +125,13 @@ class Agent(BaseModel):
         current = 0
       else:
         ep_reward += reward
-        current = (current + 1) % (self.batch_size + 1)
+        current = (current + 1) % self.batch_size
 
-      t += 1
       actionsList.append(action)
       total_reward += reward
 
-      if self.step >= self.learn_start:
-        if self.step % self.test_step == self.test_step - 1:
+      if t >= self.learn_start:
+        if self.step % self.test_step == 0:
           avg_reward = total_reward / self.test_step
           avg_loss = total_loss / update_count
           avg_q = total_q / update_count
@@ -142,12 +143,12 @@ class Agent(BaseModel):
           except:
             max_ep_reward, min_ep_reward, avg_ep_reward = 0, 0, 0
 
-          print('\navg_r: %.4f, avg_l: %.6f, avg_q: %3.6f, avg_ep_r: %.4f, max_ep_r: %.4f, min_ep_r: %.4f, # game: %d' \
-              % (avg_reward, avg_loss, avg_q, avg_ep_reward, max_ep_reward, min_ep_reward, num_game))
+          print('\navg_r: %.4f, avg_l: %.6f, avg_q: %3.6f, avg_ep_r: %.4f, max_ep_r: %.4f, min_ep_r: %.4f, # game: %d, Step #: %d' \
+                % (avg_reward, avg_loss, avg_q, avg_ep_reward, max_ep_reward, min_ep_reward, num_game, self.step))
 
           if max_avg_ep_reward * 0.9 <= avg_ep_reward:
-            self.step_assign_op.eval(session=self.sess,feed_dict={self.step_input: self.step + 1})
-            self.save_model(self.step + 1)
+            self.step_assign_op.eval(session=self.sess, feed_dict={self.step_input: self.step + 1})
+            self.save_model()
 
             max_avg_ep_reward = max(max_avg_ep_reward, avg_ep_reward)
 
@@ -175,49 +176,26 @@ class Agent(BaseModel):
           actionsList = []
 
   def predict(self, s_t, env, test_ep=None, epsilon=1., final_epsilon=0.1):
-    epsilon = test_ep or (epsilon - ((1.0 - final_epsilon) / self.anneal_epsilon_timesteps))
+    epsilon = test_ep or epsilon
 
-    if random.random() < epsilon:
+    if random.random() <= epsilon:
       action = random.randrange(env.action_size)
     else:
       action = self.q_action.eval(session=self.sess, feed_dict={self.s_t: [s_t]})[0]
 
+    # scale down epsilon
+    if epsilon > final_epsilon:
+      epsilon -= (self.initial_epsilon - final_epsilon) / self.anneal_epsilon_timesteps
+
     return action, epsilon
 
-  def getState(self, index, screens):
-    # normalize index to expected range, allows negative indexes
-    index = index % self.train_frequency
-    # if is not in the beginning of matrix
-    if index >= self.history_length - 1:
-      return screens[(index - (self.history_length - 1)):(index + 1), ...]
+  def q_learning_mini_batch(self, s_t, s_t_plus_1, action, reward, terminal, current):
 
-    indexes = [(index - i) % self.train_frequency for i in reversed(range(self.history_length))]
-    return screens[indexes, ...]
-
-  def sample(self, screens, actions, rewards, terminals):
-    dims = (self.screen_height, self.screen_width)
-    prestates = np.empty((self.batch_size, self.history_length) + dims, dtype=np.float16)
-    poststates = np.empty((self.batch_size, self.history_length) + dims, dtype=np.float16)
-
-    indexes = []
-    for index in xrange(0, self.batch_size):
-      prestates[len(indexes), ...] = self.getState(index, screens)
-      poststates[len(indexes), ...] = self.getState(index + 1, screens)
-      indexes.append(index+1)
-
-    action = actions[indexes]
-    reward = rewards[indexes]
-    terminal = terminals[indexes]
-
-    if self.cnn_format == 'NHWC':
-      return np.transpose(prestates, (0, 2, 3, 1)), action, \
-        reward, np.transpose(poststates, (0, 2, 3, 1)), terminal
-    else:
-      return prestates, action, reward, poststates, terminal
-
-  def q_learning_mini_batch(self, screens, actions, rewards, terminals):
-    s_t, action, reward, s_t_plus_1, terminal = self.sample(screens, actions, rewards, terminals)
-    print("Step count: ", self.step)
+    s_t = s_t[:current+1, ...]
+    s_t_plus_1 = s_t_plus_1[:current+1, ...]
+    action = action[:current+1]
+    reward = reward[:current+1]
+    terminal = terminal[:current+1]
 
     t = time.time()
     if self.double_q:
@@ -236,13 +214,14 @@ class Agent(BaseModel):
       max_q_t_plus_1 = np.max(q_t_plus_1, axis=1)
       target_q_t = (1. - terminal) * self.discount * max_q_t_plus_1 + reward
 
-    _, q_t, loss = self.sess.run([self.optim, self.q, self.loss], {
+    _, q_t, loss, summary_str  = self.sess.run([self.optim, self.q, self.loss, self.q_summary], {
       self.target_q_t: target_q_t,
       self.action: action,
       self.s_t: s_t,
       self.learning_rate_step: self.step,
     })
 
+    self.writer.add_summary(summary_str, self.step)
     return loss, q_t.mean()
 
   def get_final_epilon(self):
@@ -301,11 +280,11 @@ class Agent(BaseModel):
       # get the q action
       self.q_action = tf.argmax(self.q, dimension=1)
 
-      # q_summary = []
-      # avg_q = tf.reduce_mean(self.q, 0)
-      # for idx in xrange(self.env.action_size):
-      #   q_summary.append(tf.summary.histogram('q/%s' % idx, avg_q[idx]))
-      # self.q_summary = tf.summary.merge(q_summary, 'q_summary')
+      q_summary = []
+      avg_q = tf.reduce_mean(self.q, 0)
+      for idx in xrange(self.env.action_size):
+        q_summary.append(tf.summary.histogram('q/%s' % idx, avg_q[idx]))
+      self.q_summary = tf.summary.merge(q_summary, 'q_summary')
 
     # target network
     with tf.variable_scope('target'):
@@ -439,7 +418,7 @@ class Agent(BaseModel):
       self.summary_placeholders[tag]: value for tag, value in tag_dict.items()
     })
     for summary_str in summary_str_lists:
-      self.writer.add_summary(summary_str, self.step)
+      self.writer.add_summary(summary_str, step)
 
   def play(self, env, n_step=10000, n_episode=100, test_ep=None, render=False):
     if test_ep == None:

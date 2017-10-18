@@ -28,13 +28,13 @@ class BaseModel(object):
       name = attr if not attr.startswith('_') else attr[1:]
       setattr(self, name, getattr(self.config, attr))
 
-  def save_model(self, step=None):
+  def save_model(self):
     print(" [*] Saving checkpoints...")
     model_name = type(self).__name__
 
     if not os.path.exists(self.checkpoint_dir):
       os.makedirs(self.checkpoint_dir)
-    self.saver.save(self.sess, self.checkpoint_dir, global_step=step)
+    self.saver.save(self.sess, self.checkpoint_dir, global_step=self.step)
 
   def load_model(self):
     print(" [*] Loading checkpoints...")

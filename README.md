@@ -8,7 +8,7 @@ This implementation contains:
 
 1. Deep Q-network and Q-learning
 2. Varying epsilon for improving exploration vs exploitation
-    - to reduce the correlations between consecutive updates
+    - to reduce the correlations between consecutive parameter updates
 3. Network for Q-learning targets are fixed for intervals
     - to reduce the correlations between target and predicted Q-values
 4. Separate actor-learner threads
